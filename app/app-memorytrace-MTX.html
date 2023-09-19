@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en" style="height:100%;margin:0;touch-action:none;">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0,minimum-scale=1.0,maximum-scale=1.0,user-scalable=no">
+
+    <body style="height:100%;margin:0;" onload="tryConnectFirst();">
+        <h1>Route Linkage Optimizer</h1>
+        <div id="status" class="area" style="height:8%;font-size:7vmin;">Connecting...</div>
+    
+        <canvas id="mapDisplay" width="400" height="400"></canvas><br><br>
+        <button class="hidden-button" id="showLinesButton">Show Lines</button>
+        <!--<input type="text" id="linesInput" placeholder="Enter lines separated by + (e.g., AB+BC+CD)">-->
+    
+        <label for="inputTextbox">INSERT THE DESTINATIONS HERE (IN ALPHABET), SEPARATED BY "," (e.g., A,B,C,D,E)</label><br><br>
+        <label for="inputTextbox">THE FIRST POINT IS START POINT AND THE LAST POINT IS END POINT</label><br>
+        <label for="inputTextbox">ALL MIDDLES POINTS CAN BE INPUT IN RANDOM MANNER</label><br><br>
+        <label for="inputTextbox">MAXIMUM DESTINATION LIMIT IS 10</label><br><br>
+    
+        <input id="inputTextbox" type="text" style="height:10%;font-size:7vmin;width:calc(100% - 75px);box-sizing:border-box;" value="A,B,C,D,E">
+        <div class="area" style="height:15%;;width:60%;font-size:10vmin;"><div class="button" onclick="generateRoute()" id="gRoute"><span class="text">route finder</span></div></div>
+        <div class="area" style="height:15%;;width:40%;font-size:10vmin;"><div class="button" onclick="clearInput()" id="cInput"><span class="text">clear all</span></div></div>
+    
+        <input id="map" type="text" style="height:10%;font-size:7vmin;width:calc(100% - 75px);box-sizing:border-box;" value="IO76">
+        <div class="area" style="height:35%;font-size:20vmin;"><div class="button" onclick="publishCmdParam('app-memorytrace', '--map ' + document.getElementById('map').value + (document.getElementById('loop').checked?' --loop':'') + (document.getElementById('reverse').checked?' --reverse':''))"><span class="text">Play</span></div></div>
+        
+        <div class="area" style="height:7%;width:40%;"><input type="checkbox" id="loop" name="loop"><label for="loop" style="font-size:6vmin;"> loop</label></div>
+        <div class="area" style="height:7%;width:60%;"><input type="checkbox" id="reverse" name="reverse"><label for="reverse" style="font-size:6vmin;"> reverse</label></div>
+        
+        <div class="area" style="height:20%;font-size:15vmin;"><div class="button" onclick="publishCmd('')" id="stop"><span class="text">Stop</span></div></div>
+        
+        <div class="area" style="height:20%;font-size:8vmin;width:40%;"><div class="button" onclick="publishCmd('#pause')"><span class="text">#pause</span></div></div>
+        <div class="area" style="height:20%;font-size:8vmin;width:60%;"><div class="button" onclick="publishCmd('#run')"><span class="text">#run</span></div></div>
+    </body>
+
+    <style>
+        canvas {
+            border: 1px solid black;
+        }
+        .hidden-button {
+            display: none;
+        }
+    </style>
+
+    <script type="text/javascript" src="../fixed_info.js"></script>
+    <script type="text/javascript" src="../connection.js"></script>
+    <script type="text/javascript" src="../paho-mqtt-min.js"></script>
+    <script type="text/javascript" src="../client_dne_lib.js"></script>
+    <script type="text/javascript" src="../mapDisplay.js"></script>
+    <link rel="stylesheet" href="style.css">
+    <title>Connecting...</title>
+    <script>
+        function onConnected(){
+            subscribe("0/WHISPERER/" + type_and_serial + "/app_status");
+        }
+        function subscribeParse(message){
+            if(message.destinationName == "0/WHISPERER/" + type_and_serial + "/app_status"){
+                const from_json = JSON.parse(message.payloadString);
+                if(from_json.MT_suspend != null){
+                    if(from_json.MT_suspend){
+                        document.getElementById("stop").style.backgroundColor = "#FFF100";
+                        document.getElementById("stop").onclick = function(){ publishCmd('memory-cancel'); };
+                    }else{
+                        document.getElementById("stop").style.backgroundColor = "#FFFFFF";
+                        document.getElementById("stop").onclick = function(){ publishCmd(''); };
+                    }
+                }
+            }
+        }
+        function select(){
+            var sel = document.getElementById("select");
+            if(sel.value != ""){
+                document.getElementById("map").value = sel.value;
+                sel.options[0].selected = true;
+            }
+        }
+        //var datasetArray = new Array(3628800); //3628800 is factorial of 10
+        let n = 3628800;
+        var datasetArray = new Array(n);
+
+        // Allocate the array structure
+        for (let i = 0; i < n; i++) {
+            datasetArray[i] = new Array(2); // Each dataset has 2 columns
+        }
+
+        var CSVdatasetAr = [];
+        var csvFilePath = "http://localhost:8000//PRGL.csv";
+        var resultArr = [];
+        var shortestRoute;
+        var shortestValue;
+        var finalRoute;
+        var finalRouteRevise;
+
+        function generateRoute() {
+        // Generate the optimize route from destinations input, based on all the possible routes and pick the shortest path
+            let inputTextbox = document.getElementById("inputTextbox");
+            let inputstring = inputTextbox.value;
+            let dataArray = inputstring.split(",");
+
+            let dataCount = dataArray.length;
+            if (dataCount > 11) {
+                alert("The number of data is over 11. Exiting the program.");
+                return;
+            }
+
+            let outputString = dataArray.slice(1, dataArray.length - 1).join(",");
+            let middlePoints = outputString;
+
+            let startPoint = dataArray[0];
+            let endPoint = dataArray[dataArray.length - 1];
+            let numMiddlePoints = dataArray.length - 2;
+
+            if (numMiddlePoints > 1) {
+                if (!validatePointName(startPoint) || !validatePointName(endPoint) || !validateMiddlePoints(middlePoints)) { 
+                    alert("Invalid input. Please enter valid point names.");
+                    return;
+                }
+            } else {
+                if (!validatePointName(startPoint) || !validatePointName(endPoint)) { 
+                    alert("Invalid input. Please enter valid point names.");
+                    return;
+                }
+            }
+
+            let middlePointArr = middlePoints.split(",");
+            middlePointArr.sort();
+
+            let routeName = startPoint;
+
+            let j = factorial(numMiddlePoints);
+            let k = 1;
+
+            do {
+                for (let i = 0; i < numMiddlePoints; i++) {
+                    routeName += middlePointArr[i] + "+" + middlePointArr[i];
+                }
+
+                var FirstData = routeName + endPoint;
+                if (k < (j + 1)) {
+                    datasetArray[k-1][0] = [FirstData];
+                    k++;
+                }
+
+                routeName = startPoint;
+
+            } while (numMiddlePoints > 1 && generateNextPermutation(middlePointArr));
+
+            //console.log(datasetArray); // This will log the CSV data as an array of arrays (rows and columns)
+            loadCSVData(csvFilePath, function() {
+                // CSV data is loaded here
+                // You can now call the function that relies on CSVdatasetAr
+                if (numMiddlePoints > 1) {
+                resultArr = getLowestValueAndShortestRoute();
+                shortestRoute = resultArr[0];
+                shortestValue = resultArr[1];
+                finalRoute = shortestRoute;
+                } else {
+                    sValue = datasetArray[0][1];
+                    sRoute = datasetArray[0][0];
+                    resultLS = [sRoute, sValue];
+                    resultArr = resultLS;
+                    shortestRoute = resultArr[0];
+                    finalRoute = shortestRoute;
+                }
+
+                let routeModifier = {
+                    replaceDataInString: function(finalRouteRevise, csvFilePath) {
+                    // Existing code to modify finalRouteRevise
+                    finalRoute = finalRoute.map(str => str.replace(/\r/g, ""));
+                    let objectAsString = JSON.stringify(finalRoute[0]);
+                    let dataArray = objectAsString.split('+');
+
+                    console.log(objectAsString);
+                    console.log(dataArray);
+
+                    let i, j, dataset;
+
+                    for (i = 0; i < dataArray.length; i++) {
+                        for (j = 0; j < CSVdatasetAr.length; j++) {
+                            dataset = CSVdatasetAr[j];
+                            dataset = dataset.map(str => str.replace(/\r/g, ''));
+                            //console.log(dataset);
+                            if (dataArray[i] === dataset[0]) {
+                                dataArray[i] = dataset[2];
+                                break;
+                            }
+                        }
+                    }
+                    finalRouteRevise = dataArray.join("+");
+                    // Remove double quotation marks from the value
+                    finalRouteRevise = finalRouteRevise.replace(/"/g, '');
+                    return finalRouteRevise;
+
+                            this.finalRoute = finalRouteRevise; // Update the finalRoute property of the object
+                            return finalRouteRevise;
+                            }
+                        };
+
+                let modifiedValue = routeModifier.replaceDataInString(finalRoute, csvFilePath); // Call the method and get the modified value
+                //console.log(modifiedValue); // Use the modified value
+
+                // Set the value of the resultTextbox
+                let resultTextbox = document.getElementById("map");
+                resultTextbox.value = modifiedValue;
+                document.getElementById("showLinesButton").click(); // Display route result in mapDisplay
+                
+            });
+        }
+
+        function generateNextPermutation(arr) {
+            let i, j, k;
+
+            if (arr.length < 2) {
+                return false;
+            }
+
+            i = arr.length - 2;
+            while (arr[i] >= arr[i + 1]) {
+                if (i === 0) return false;
+                i--;
+            }
+
+            j = arr.length - 1;
+            while (arr[j] <= arr[i]) {
+                j--;
+            }
+
+            swap(arr, i, j);
+
+            k = i + 1;
+            j = arr.length - 1;
+            while (k < j) {
+                swap(arr, k, j);
+                k++;
+                j--;
+            }
+
+            return true;
+        }
+
+        function swap(arr, a, b) {
+            let temp = arr[a];
+            arr[a] = arr[b];
+            arr[b] = temp;
+        }
+
+        function validatePointName(pointName) {
+            return /^[a-zA-Z]+$/.test(pointName);
+        }
+
+        function validateMiddlePoints(middlePoints) {
+            let pointArr = middlePoints.split(",");
+            for (let i = 0; i < pointArr.length; i++) {
+                if (!validatePointName(pointArr[i].trim())) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function factorial(n) {
+            if (n <= 1) {
+                return 1;
+            } else {
+                return n * factorial(n - 1);
+            }
+        }
+
+        function loadCSVData(csvFilePath, callback) {
+            let xhr = new XMLHttpRequest();
+            xhr.open("GET", csvFilePath, true);
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4 && xhr.status === 200) {
+                    let fileContent = xhr.responseText;
+                    let dataArray = fileContent.split('\n');
+                    CSVdatasetAr = dataArray.map(function(line) {
+                        return line.split(',');
+                    });
+                    callback(CSVdatasetAr);
+                }
+            };
+            xhr.send();
+        }
+
+        function getLowestValueAndShortestRoute() {
+            const nonEmptyCount = datasetArray.filter(dataset => dataset.some(item => item !== undefined && item !== null && item !== '')).length;
+            //console.log(nonEmptyCount); //Confirmation
+            
+            for (let i = 0; i < nonEmptyCount; i++) {
+                let objectAsString = JSON.stringify(datasetArray[i][0]);
+                let dataParts = objectAsString.split('+');
+                let sumValue = 0;
+
+                for (let k = 0; k < dataParts.length; k++) {
+                    for (let j = 0; j < CSVdatasetAr.length; j++) {
+                        if (CSVdatasetAr[j][0] === dataParts[k]) {
+                            sumValue += parseFloat(CSVdatasetAr[j][1]);
+                            break; // Exit the loop once a match is found
+                        }
+                    }
+                }
+                datasetArray[i][1] = sumValue;
+            }
+
+            var sValue = 0; // Initialize with 0 (if no non-zero value is found)
+            var sRoute = '';
+            var foundNonZero = false;
+
+            for (let i = 0; i < datasetArray.length; i++) {
+                if (datasetArray[i][1] !== 0) {
+                    if (!foundNonZero || datasetArray[i][1] < sValue) {
+                        sValue = datasetArray[i][1];
+                        sRoute = datasetArray[i][0];
+                        foundNonZero = true;
+                    }
+                }
+            }
+            // Return the result as an array
+            var resultLS = [sRoute, sValue];
+            return resultLS;
+        }
+
+        function clearInput() {
+            let inputTextbox = document.getElementById("inputTextbox");
+            inputTextbox.value = ""; // Set the input field value to an empty string
+            
+            let resultTextbox = document.getElementById("map");
+            resultTextbox.value = ""; // Clear the resultTextbox value
+            clearCanvas() // Clear the mapDisplay
+        }
+        
+    </script>
+</head>
+</html>
